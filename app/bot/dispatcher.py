@@ -65,6 +65,27 @@ if TYPE_CHECKING:
 logger = structlog.get_logger(__name__)
 
 # ---------------------------------------------------------------------------
+# Thinking message helper
+# ---------------------------------------------------------------------------
+
+async def _edit_or_reply(thinking_msg: Any, update: Update, text: str, **kwargs: Any) -> None:
+    """
+    Edit the 'Thinking...' placeholder message with the real response.
+    Falls back to a new reply if editing fails (e.g. the message was deleted).
+    """
+    if thinking_msg is not None:
+        try:
+            await thinking_msg.edit_text(text, **kwargs)
+            return
+        except Exception:  # noqa: BLE001
+            pass  # fall through to a new reply
+    if update.message:
+        try:
+            await update.message.reply_text(text, **kwargs)
+        except Exception:  # noqa: BLE001
+            pass
+
+# ---------------------------------------------------------------------------
 # Error / informational messages
 # ---------------------------------------------------------------------------
 
@@ -199,6 +220,7 @@ async def _handle_mixed_query(
     llm_client: LLMClient,
     route_result: RouteResult,
     user_message: str,
+    thinking_msg: Any = None,
 ) -> dict[str, Any]:
     """
     Handle MIXED_QUERY intent: run personal-data and knowledge paths
@@ -320,8 +342,7 @@ async def _handle_mixed_query(
             + (knowledge_meta.get("tokens_used") or 0)
         )
 
-    if update.message:
-        await update.message.reply_text(synthesised_text)
+    await _edit_or_reply(thinking_msg, update, synthesised_text)
 
     return {"model_used": model_used, "tokens_used": tokens_used}
 
@@ -393,6 +414,17 @@ async def dispatch(
         return
 
     # ------------------------------------------------------------------
+    # Show "Thinking..." immediately so the user knows we're working.
+    # We edit this message in-place once we have the real reply.
+    # ------------------------------------------------------------------
+    thinking_msg = None
+    if update.message:
+        try:
+            thinking_msg = await update.message.reply_text("💭 Thinking...")
+        except Exception:  # noqa: BLE001
+            thinking_msg = None
+
+    # ------------------------------------------------------------------
     # Initialise LLM client
     # ------------------------------------------------------------------
     if llm_client is None:
@@ -402,7 +434,21 @@ async def dispatch(
     # Approval pending gate — block pending users before any processing
     # ------------------------------------------------------------------
     if context.bot_data and context.bot_data.get("approval_pending"):
-        if update.message:
+        if thinking_msg is not None:
+            try:
+                await thinking_msg.edit_text(
+                    "⏳ Your account is awaiting admin approval.\n"
+                    "You'll receive a message as soon as you're approved — "
+                    "usually within a few hours. Thanks for your patience!"
+                )
+            except Exception:  # noqa: BLE001
+                if update.message:
+                    await update.message.reply_text(
+                        "⏳ Your account is awaiting admin approval.\n"
+                        "You'll receive a message as soon as you're approved — "
+                        "usually within a few hours. Thanks for your patience!"
+                    )
+        elif update.message:
             await update.message.reply_text(
                 "⏳ Your account is awaiting admin approval.\n"
                 "You'll receive a message as soon as you're approved — "
@@ -441,11 +487,17 @@ async def dispatch(
         if intent_label == "UNCLASSIFIED":
             # Req 14.8 — return error; invoke NO downstream pipeline
             log.info("dispatch_unclassified_intent")
-            if update.message:
-                await update.message.reply_text(_MSG_UNCLASSIFIED)
+            await _edit_or_reply(thinking_msg, update, _MSG_UNCLASSIFIED)
 
         elif intent_label == "LOGGING":
             # Req 14.1 → extraction pipeline → confirmation loop
+            # Dismiss the thinking message first — logging handler sends its own
+            # interactive confirmation keyboard message.
+            if thinking_msg is not None:
+                try:
+                    await thinking_msg.delete()
+                except Exception:  # noqa: BLE001
+                    pass
             meta = await _invoke_logging_handler(update, context, llm_client, route_result)
             model_used = meta.get("model_used")
             tokens_used = meta.get("tokens_used")
@@ -457,8 +509,8 @@ async def dispatch(
             )
             model_used = meta.get("model_used")
             tokens_used = meta.get("tokens_used")
-            if text and update.message:
-                await update.message.reply_text(text)
+            if text:
+                await _edit_or_reply(thinking_msg, update, text)
 
         elif intent_label == "KNOWLEDGE_QUESTION":
             # Req 14.4 — RAG pipeline
@@ -467,13 +519,13 @@ async def dispatch(
             )
             model_used = meta.get("model_used")
             tokens_used = meta.get("tokens_used")
-            if text and update.message:
-                await update.message.reply_text(text)
+            if text:
+                await _edit_or_reply(thinking_msg, update, text)
 
         elif intent_label == "MIXED_QUERY":
             # Req 14.5 — both paths concurrently, synthesise via reasoning tier
             meta = await _handle_mixed_query(
-                update, context, llm_client, route_result, user_message
+                update, context, llm_client, route_result, user_message, thinking_msg
             )
             model_used = meta.get("model_used")
             tokens_used = meta.get("tokens_used")
@@ -481,13 +533,11 @@ async def dispatch(
         else:
             # Defensive fallback — treat unknown labels as unclassified
             log.warning("dispatch_unknown_intent_label", label=intent_label)
-            if update.message:
-                await update.message.reply_text(_MSG_UNCLASSIFIED)
+            await _edit_or_reply(thinking_msg, update, _MSG_UNCLASSIFIED)
 
     except Exception:  # noqa: BLE001
         log.exception("dispatch_unhandled_exception")
-        if update.message:
-            await update.message.reply_text(_MSG_GENERIC_ERROR)
+        await _edit_or_reply(thinking_msg, update, _MSG_GENERIC_ERROR)
 
     finally:
         # ------------------------------------------------------------------

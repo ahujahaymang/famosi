@@ -148,10 +148,11 @@ def _clear_data(context: ContextTypes.DEFAULT_TYPE) -> None:
 async def _get_user_id(context: ContextTypes.DEFAULT_TYPE) -> int | None:
     """
     Retrieve the internal DB user_id from context.bot_data (set by
-    auth middleware).  Returns None if not available.
+    auth middleware under the key "current_user").
+    Returns None if not available.
     """
     if context.bot_data:
-        user_obj = context.bot_data.get("user")
+        user_obj = context.bot_data.get("current_user")
         return getattr(user_obj, "id", None)
     return None
 

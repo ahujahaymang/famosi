@@ -555,10 +555,11 @@ async def handle_confirm_callback(
     if callback_data == CONFIRM_SAVE:
         log.info("logging_handler_confirm_save", record_type=record_type)
 
-        # Retrieve the internal DB user_id if auth middleware stored it
+        # Retrieve the internal DB user_id if auth middleware stored it.
+        # Auth middleware stores the User object under "current_user".
         user_id: int | None = None
         if context.bot_data:
-            user_obj = context.bot_data.get("user")
+            user_obj = context.bot_data.get("current_user")
             user_id = getattr(user_obj, "id", None)
 
         # Fallback: attempt to use telegram_user_id as a proxy (unlikely to be

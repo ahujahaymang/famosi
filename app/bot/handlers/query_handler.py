@@ -372,12 +372,11 @@ async def handle_query_intent(
     user_id: int | None = None
     requesting_role: str = "mom"  # safe default
 
-    if context.bot_data and isinstance(context.bot_data.get("user"), object):
-        user_obj = context.bot_data.get("user")
+    if context.bot_data and isinstance(context.bot_data.get("current_user"), object):
+        user_obj = context.bot_data.get("current_user")
         user_id = getattr(user_obj, "id", None)
         raw_role = getattr(user_obj, "role", None)
         if raw_role is not None:
-            # UserRole is a str enum; .value gives the plain string
             requesting_role = str(getattr(raw_role, "value", raw_role)).lower()
 
     log = logger.bind(
