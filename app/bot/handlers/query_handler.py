@@ -38,6 +38,7 @@ from typing import TYPE_CHECKING, Any
 import structlog
 
 from app.dependencies import _AsyncSessionFactory
+from app.memory import personal_memory
 
 if TYPE_CHECKING:
     from app.core.intent_router import RouteResult
@@ -434,8 +435,6 @@ async def handle_query_intent(
     # ------------------------------------------------------------------
     records: list[Any] = []
     try:
-        from app.memory import personal_memory  # noqa: PLC0415
-
         async with _AsyncSessionFactory() as db:
             records = await personal_memory.get_records(
                 db=db,

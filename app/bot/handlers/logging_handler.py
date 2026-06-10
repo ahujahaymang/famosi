@@ -74,15 +74,16 @@ logger = structlog.get_logger(__name__)
 # ---------------------------------------------------------------------------
 
 # Each tuple: (keywords, record_type)
+# Order matters: more specific rules first to avoid false-positive matches.
 _KEYWORD_RULES: list[tuple[tuple[str, ...], str]] = [
-    (("meal", "food", "ate", "eat", "breakfast", "lunch", "dinner"), "meal"),
-    (("symptom", "nausea", "pain", "headache", "cramp", "dizzy", "tired", "vomit"), "symptom"),
-    (("exercise", "workout", "walk", "yoga", "swim", "run"), "exercise"),
-    (("medication", "medicine", "pill", "tablet", "supplement", "vitamin"), "medication"),
-    (("weight", "weigh", "kg", "lbs", "pounds"), "weight"),
-    (("water", "drink", "hydrat", "ml", "oz", "glass"), "water"),
     (("question", "ask", "doctor", "appointment", "want to know"), "question"),
-    (("prefer", "allergy", "avoid", "like", "dislike", "hate"), "preference"),
+    (("symptom", "nausea", "nauseous", "pain", "headache", "cramp", "backache", "dizzy", "tired", "vomit", "ache"), "symptom"),
+    (("exercise", "workout", "walk", "yoga", "swim", "run"), "exercise"),
+    (("medication", "medicine", "pill", "tablet", "supplement", "vitamin", "folic"), "medication"),
+    (("weight", "weigh", "kg", "lbs", "pounds"), "weight"),
+    (("water", "drink", "hydrat", "ml", "oz", "glass", "glasses", "litre", "litres", "liter", "liters", "cup", "cups"), "water"),
+    (("prefer", "allergy", "allergic", "avoid", "dislike", "vegetarian", "vegan", "meat", "shellfish"), "preference"),
+    (("meal", "food", "ate", "eat", "breakfast", "lunch", "dinner"), "meal"),
 ]
 
 # Labels for the visibility levels shown to the user

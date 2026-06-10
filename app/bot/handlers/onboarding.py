@@ -71,6 +71,7 @@ from app.bot.keyboards.onboarding import (
 from app.dependencies import _AsyncSessionFactory
 from app.models.family_unit import FamilyUnit
 from app.models.user import FoodPreference, User, UserRole
+from app.services.admin_service import clear_pending
 
 logger = structlog.get_logger(__name__)
 
@@ -437,7 +438,6 @@ async def handle_confirm_reset(update: Update, context: ContextTypes.DEFAULT_TYP
     await _clear_state(telegram_user_id)
 
     # Also clear any pending-approval state for this user
-    from app.services.admin_service import clear_pending
     clear_pending(telegram_user_id)
 
     context.user_data[_DATA_KEY] = {}  # type: ignore[index]

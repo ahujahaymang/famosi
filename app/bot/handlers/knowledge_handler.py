@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, Any
 import structlog
 
 from app.dependencies import _AsyncSessionFactory
+from app.knowledge import retriever
 from app.models.knowledge_document import KnowledgeCategory
 from app.models.user import UserRole
 
@@ -171,8 +172,6 @@ async def handle_knowledge_intent(
     # ------------------------------------------------------------------
     # Step 2 — retrieve relevant chunks via RAG
     # ------------------------------------------------------------------
-    from app.knowledge import retriever  # noqa: PLC0415
-
     chunks = []
     try:
         async with _AsyncSessionFactory() as db:

@@ -44,6 +44,7 @@ from app.config import settings
 from app.models.request_log import RequestLog
 from app.models.subscription import Subscription, SubscriptionStatus
 from app.models.user import User, UserRole
+from app.payment.state_machine import PaymentStateMachine
 
 logger = structlog.get_logger(__name__)
 
@@ -444,8 +445,6 @@ async def approve_user_db(
     user = result.scalar_one_or_none()
     if user is None:
         raise LookupError(f"No user with telegram_user_id={telegram_user_id}")
-
-    from app.payment.state_machine import PaymentStateMachine
 
     sm = PaymentStateMachine()
     sub = await sm.activate_trial(user.id, db)
