@@ -1,0 +1,69 @@
+version: "3.9"
+
+services:
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: famosi_postgres
+    environment:
+      POSTGRES_USER: famosi
+      POSTGRES_PASSWORD: famosi
+      POSTGRES_DB: famosi
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - famosi_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U famosi -d famosi"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: famosi_redis
+    ports:
+      - "6379:6379"
+    networks:
+      - famosi_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: famosi_app
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - famosi_network
+    command: >
+      uvicorn app.main:app
+      --host 0.0.0.0
+      --port 8000
+      --reload
+    volumes:
+      # Mount source code for hot-reload during local development
+      - ./app:/app/app
+      - ./alembic:/app/alembic
+
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  famosi_network:
+    driver: bridge
