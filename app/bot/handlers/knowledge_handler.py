@@ -57,17 +57,20 @@ _NO_GUIDANCE_MESSAGE = (
 _KNOWLEDGE_SYSTEM_PROMPT_TEMPLATE = """\
 You are Famosi, a knowledgeable and empathetic pregnancy assistant.
 
-The user is currently {gestational_context}.
+The user is {user_role_context}.
+The pregnancy is currently at {gestational_context}.
 
 Answer the user's question using the context passages below where relevant.
 If the context passages don't cover the question, use your general pregnancy
-knowledge — especially their gestational stage — to give a helpful answer.
-Do not say you cannot help.
+knowledge to give a helpful answer. Do not say you cannot help.
 
 Guidelines:
+- Address the user according to their role (partner/dad or mom).
+- If the user is a partner, frame advice around how they can support and what
+  to expect — not what the mother should do herself.
 - Be warm, clear, and concise — this is a Telegram message.
 - Cite the source name (e.g. ACOG, WHO, NHS, CDC) when the context is relevant.
-- Tailor your answer to their gestational stage where appropriate.
+- Tailor your answer to the gestational stage where appropriate.
 - Keep the response under 400 words.
 
 --- CONTEXT PASSAGES ---
@@ -82,11 +85,14 @@ Guidelines:
 _FALLBACK_SYSTEM_PROMPT_TEMPLATE = """\
 You are Famosi, a knowledgeable and empathetic pregnancy assistant.
 
-The user is currently {gestational_context}.
+The user is {user_role_context}.
+The pregnancy is currently at {gestational_context}.
 
 Answer their question using your general pregnancy knowledge.
 Guidelines:
-- Tailor your answer to their gestational stage where relevant.
+- Address the user according to their role (partner/dad or mom).
+- If the user is a partner, frame advice around support and shared experience —
+  not instructions directed at the mother.
 - Be warm, clear, and concise — this is a Telegram message, not a medical document.
 - Mention any well-known safety considerations specific to pregnancy.
 - End with a brief note to confirm with their healthcare provider for personalised advice.
@@ -183,6 +189,17 @@ async def handle_knowledge_intent(
                 top_k=5,
                 category=category_filter,
             )
+            # If partner category filter returned nothing, retry without filter
+            # so the partner still gets general pregnancy knowledge answers.
+            if not chunks and category_filter is not None:
+                log.debug("knowledge_handler_partner_retry_without_filter")
+                chunks = await retriever.retrieve(
+                    query_text=user_message,
+                    db=db,
+                    llm_client=llm_client,
+                    top_k=5,
+                    category=None,
+                )
     except Exception:  # noqa: BLE001
         log.exception("knowledge_handler_retrieval_failed")
         return None, {"model_used": None, "tokens_used": None}
@@ -194,9 +211,7 @@ async def handle_knowledge_intent(
     )
 
     # ------------------------------------------------------------------
-    # Step 3 — LLM fallback when RAG returns empty (Req 15.6 adapted)
-    # When the knowledge base has no relevant chunks, fall through to
-    # the LLM using the user's gestational stage as grounding context.
+    # Step 3 — LLM fallback when RAG returns empty
     # ------------------------------------------------------------------
     if not chunks:
         log.info("knowledge_handler_rag_empty_using_llm_fallback")
@@ -204,13 +219,13 @@ async def handle_knowledge_intent(
 
     # ------------------------------------------------------------------
     # Step 4 — compose grounded response via the reasoning tier (Req 14.4)
-    # Always inject gestational context so the model can personalise even
-    # when RAG chunks are available.
     # ------------------------------------------------------------------
     gestational_context = _build_gestational_context(user_obj)
+    user_role_context = _build_role_context(user_obj)
     context_text = _build_context_text(chunks)
     system_prompt = _KNOWLEDGE_SYSTEM_PROMPT_TEMPLATE.format(
         gestational_context=gestational_context,
+        user_role_context=user_role_context,
         context=context_text,
     )
 
@@ -242,11 +257,8 @@ async def handle_knowledge_intent(
 def _build_gestational_context(user_obj: Any) -> str:
     """
     Build a gestational context string from the user's profile.
-
-    Returns a human-readable string like "8 weeks and 3 days pregnant"
-    or "pregnant" as a safe default when no date is available.
-    Used in both RAG and fallback system prompts so the model always knows
-    where the user is in their pregnancy.
+    Returns e.g. "8 weeks and 3 days pregnant (estimated due date 2027-01-20)"
+    or "pregnant" as a safe default.
     """
     from datetime import date, timedelta
     from app.components.pregnancy_engine import calculate_gestational_age
@@ -272,6 +284,26 @@ def _build_gestational_context(user_obj: Any) -> str:
     return "pregnant"
 
 
+def _build_role_context(user_obj: Any) -> str:
+    """
+    Return a plain-English role description for the system prompt.
+    The model uses this to address the user correctly and frame answers
+    from the right perspective (partner vs. mom).
+    """
+    if user_obj is None:
+        return "a pregnant person"
+
+    from app.models.user import UserRole
+    raw_role = getattr(user_obj, "role", None)
+    if raw_role is None:
+        return "a pregnant person"
+
+    role_value = str(getattr(raw_role, "value", raw_role)).lower()
+    if role_value == UserRole.partner.value:
+        return "the partner/dad (not the pregnant person themselves)"
+    return "the pregnant mom"
+
+
 async def _llm_fallback(
     user_message: str,
     user_obj: Any,
@@ -280,11 +312,13 @@ async def _llm_fallback(
 ) -> tuple[str | None, dict]:
     """
     Answer the question using the LLM's own knowledge when RAG has no chunks.
-    Injects the user's gestational stage to personalise the response.
+    Injects gestational stage and user role so the model answers correctly.
     """
     gestational_context = _build_gestational_context(user_obj)
+    user_role_context = _build_role_context(user_obj)
     system_prompt = _FALLBACK_SYSTEM_PROMPT_TEMPLATE.format(
-        gestational_context=gestational_context
+        gestational_context=gestational_context,
+        user_role_context=user_role_context,
     )
     messages = [
         {"role": "system", "content": system_prompt},
@@ -292,7 +326,6 @@ async def _llm_fallback(
     ]
 
     try:
-        # Try reasoning tier first; fall back to mini if Bedrock isn't configured
         try:
             response = await llm_client.complete("reasoning", messages)
         except Exception:

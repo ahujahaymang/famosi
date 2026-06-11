@@ -93,12 +93,17 @@ _SYSTEM_PROMPT = """\
 You are an intent classifier for a pregnancy assistant chatbot.
 
 Classify the user message into EXACTLY one of the following intents:
-- LOGGING           : The user is recording something — a meal, symptom, exercise session,
-                      medication, weight, water intake, or a question to ask their doctor.
+- LOGGING           : The user is recording or scheduling something — a meal, symptom,
+                      exercise session, medication, weight, water intake, a question to
+                      ask their doctor, OR scheduling/creating an appointment or reminder.
+                      Examples: "I had oatmeal", "mild nausea today", "appointment tomorrow
+                      at 10am", "remind me to take iron at 9am", "set a scan for Friday".
 - PERSONAL_DATA_QUERY: The user is asking about data they have previously logged
-                       (e.g., "what did I eat yesterday?", "show my symptoms this week").
+                       (e.g., "what did I eat yesterday?", "show my symptoms this week",
+                       "what appointments do I have coming up?").
 - KNOWLEDGE_QUESTION: The user is asking a factual or medical pregnancy question that is
-                      not about their own logged data (e.g., "is sushi safe during pregnancy?").
+                      not about their own logged data (e.g., "is sushi safe during pregnancy?",
+                      "how should I prepare for an ultrasound?").
 - MIXED_QUERY       : Answering requires BOTH personal logged data AND factual/medical knowledge.
 
 Rules:
@@ -106,6 +111,8 @@ Rules:
 2. The JSON object MUST contain exactly two keys: "intent" and "confidence".
 3. "intent" MUST be one of the four labels above, in UPPERCASE.
 4. "confidence" MUST be a number between 0.0 and 1.0 representing how certain you are.
+5. Messages that create, schedule, or set something new → LOGGING.
+   Messages asking what was already recorded → PERSONAL_DATA_QUERY.
 
 Example response:
 {"intent": "LOGGING", "confidence": 0.95}
