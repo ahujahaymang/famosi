@@ -288,16 +288,20 @@ async def _upsert_user(telegram_user_id: int, data: dict[str, Any]) -> User:
 
 
 async def _link_partner_to_family(
-    partner_telegram_id: int,
+    joiner_telegram_id: int,
     invite_code: str,
 ) -> tuple[bool, str]:
     """
-    Look up FamilyUnit by invite_code and link the partner.
+    Look up FamilyUnit by invite_code and link the joining user.
+
+    Works regardless of which role created the code or which role is joining.
+    The "creator" is whoever generated the code (stored in mom_user_id).
+    The "joiner" is whoever enters it.
 
     Returns (success: bool, message: str).
     Side-effects:
-    - Sets partner.family_unit_id = family_unit.id
-    - Sets mom.family_unit_id = family_unit.id  (if not already set)
+    - Sets joiner.family_unit_id = family_unit.id
+    - Sets creator.family_unit_id = family_unit.id  (if not already set)
     - Sets family_unit.invite_used = True
     """
     code = invite_code.strip().upper()
@@ -316,34 +320,38 @@ async def _link_partner_to_family(
                 "Ask your partner to generate a new one with /invite."
             )
 
-        # Load partner user row
-        partner_result = await session.execute(
-            select(User).where(User.telegram_user_id == partner_telegram_id)
+        # Load the joining user
+        joiner_result = await session.execute(
+            select(User).where(User.telegram_user_id == joiner_telegram_id)
         )
-        partner = partner_result.scalar_one_or_none()
-        if partner is None:
+        joiner = joiner_result.scalar_one_or_none()
+        if joiner is None:
             return False, "❌ Could not find your user record. Please try again."
 
-        # Link partner
-        partner.family_unit_id = family_unit.id
+        # Don't let the creator link to their own code
+        if family_unit.mom_user_id == joiner.id:
+            return False, "❌ You can't link to your own invite code. Share it with your partner."
 
-        # Also link mom if she isn't linked yet
+        # Link joiner
+        joiner.family_unit_id = family_unit.id
+
+        # Also ensure the code creator is linked to the same family unit
         if family_unit.mom_user_id is not None:
-            mom_result = await session.execute(
+            creator_result = await session.execute(
                 select(User).where(User.id == family_unit.mom_user_id)
             )
-            mom = mom_result.scalar_one_or_none()
-            if mom is not None and mom.family_unit_id is None:
-                mom.family_unit_id = family_unit.id
+            creator = creator_result.scalar_one_or_none()
+            if creator is not None and creator.family_unit_id is None:
+                creator.family_unit_id = family_unit.id
 
-        # Mark code as used
+        # Mark code as used so it can't be reused
         family_unit.invite_used = True
 
         await session.commit()
 
     logger.info(
-        "partner_linked_to_family",
-        partner_telegram_id=partner_telegram_id,
+        "user_linked_to_family",
+        joiner_telegram_id=joiner_telegram_id,
         family_unit_id=family_unit.id,
     )
     return True, "✅ You're now linked to your partner's account!"
@@ -526,26 +534,30 @@ async def handle_role(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     logger.info("onboarding_role_selected", telegram_user_id=telegram_user_id)
 
     if value == UserRole.partner.value:
-        # Partners go through invite-code step first
-        await _save_state(telegram_user_id, INVITE_CODE, data)
-        await query.edit_message_text(
+        next_prompt = (
             "🔗 *Family linking*\n\n"
-            "If your partner is already on Famosi, ask them to send you their "
-            "invite code (they can get it with /invite).\n\n"
-            "Enter the 6-character code below, or tap *Skip* to link later.",
-            parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup(
-                [[InlineKeyboardButton("Skip →", callback_data="invite:skip")]]
-            ),
+            "If your partner (mom) is already on Famosi, ask them to send you "
+            "their invite code (they get it with /invite).\n\n"
+            "Enter the 6-character code below, or tap *Skip* to link later."
         )
-        return INVITE_CODE
     else:
-        await _save_state(telegram_user_id, DUE_DATE_OR_LMP, data)
-        await query.edit_message_text(
-            "📅 Please enter your due date (YYYY-MM-DD).\n"
-            "It must be 1–280 days from today."
+        next_prompt = (
+            "🔗 *Family linking*\n\n"
+            "If your partner is already on Famosi, ask them for their invite "
+            "code (they get it with /invite).\n\n"
+            "Enter the 6-character code below, or tap *Skip* — you can always "
+            "link later with /invite."
         )
-        return DUE_DATE_OR_LMP
+
+    await _save_state(telegram_user_id, INVITE_CODE, data)
+    await query.edit_message_text(
+        next_prompt,
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(
+            [[InlineKeyboardButton("Skip →", callback_data="invite:skip")]]
+        ),
+    )
+    return INVITE_CODE
 
 
 async def handle_invite_code(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -566,11 +578,19 @@ async def handle_invite_code(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.callback_query.answer()
         data["invite_code"] = None
         await _save_state(telegram_user_id, DUE_DATE_OR_LMP, data)
-        await update.callback_query.edit_message_text(
-            "No problem — you can link later.\n\n"
-            "📅 Please enter the LMP date (YYYY-MM-DD).\n"
-            "It must be 1–280 days in the past."
-        )
+        role = data.get("role", UserRole.mom.value)
+        if role == UserRole.mom.value:
+            await update.callback_query.edit_message_text(
+                "No problem — you can link later with /invite.\n\n"
+                "📅 Please enter your due date (YYYY-MM-DD).\n"
+                "It must be 1–280 days from today."
+            )
+        else:
+            await update.callback_query.edit_message_text(
+                "No problem — you can link later with /invite.\n\n"
+                "📅 Please enter the LMP date (YYYY-MM-DD).\n"
+                "It must be 1–280 days in the past."
+            )
         return DUE_DATE_OR_LMP
 
     # --- Text entry ---
@@ -613,11 +633,20 @@ async def handle_invite_code(update: Update, context: ContextTypes.DEFAULT_TYPE)
     # Valid — store and continue
     data["invite_code"] = raw
     await _save_state(telegram_user_id, DUE_DATE_OR_LMP, data)
-    await update.message.reply_text(
-        f"✅ Code accepted! You'll be linked to your partner once setup is complete.\n\n"
-        "📅 Please enter the LMP date (YYYY-MM-DD).\n"
-        "It must be 1–280 days in the past."
-    )
+    role = data.get("role", UserRole.mom.value)
+    if role == UserRole.mom.value:
+        next_prompt = (
+            "✅ Code accepted! You'll be linked to your partner once setup is complete.\n\n"
+            "📅 Please enter your due date (YYYY-MM-DD).\n"
+            "It must be 1–280 days from today."
+        )
+    else:
+        next_prompt = (
+            "✅ Code accepted! You'll be linked to your partner once setup is complete.\n\n"
+            "📅 Please enter the LMP date (YYYY-MM-DD).\n"
+            "It must be 1–280 days in the past."
+        )
+    await update.message.reply_text(next_prompt)
     return DUE_DATE_OR_LMP
 
 
@@ -974,6 +1003,23 @@ async def _complete_onboarding(
     else:
         await update_or_query.reply_text(welcome, parse_mode="Markdown")
 
+    # Present consent policy automatically after onboarding (Req 2.1)
+    # Use a brief delay so the welcome message lands first, then send consent.
+    import asyncio as _asyncio
+
+    async def _send_consent() -> None:
+        await _asyncio.sleep(1)
+        try:
+            from app.bot.handlers.consent import present_policy_if_needed  # noqa: PLC0415
+            from telegram import Bot  # noqa: PLC0415
+            from app.config import settings as _settings  # noqa: PLC0415
+            bot = Bot(token=_settings.telegram_bot_token)
+            await present_policy_if_needed(telegram_user_id, bot)
+        except Exception as _exc:
+            logger.warning("onboarding_consent_present_failed", error=str(_exc))
+
+    _asyncio.create_task(_send_consent())
+
     logger.info(
         "onboarding_complete",
         telegram_user_id=telegram_user_id,
@@ -983,15 +1029,21 @@ async def _complete_onboarding(
 
 
 # ---------------------------------------------------------------------------
-# /invite command — mom generates a family invite code
+# /invite command — either partner generates a family invite code
 # ---------------------------------------------------------------------------
 
 async def cmd_invite(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
-    Generate (or show an existing) family invite code for this mom.
+    Generate (or show an existing) family invite code.
 
-    Creates a FamilyUnit row with a fresh invite_code if one doesn't exist.
-    The partner enters this code during their onboarding to link accounts.
+    Either the mom or the partner can run /invite to generate a 6-char code.
+    The other person enters this code during their onboarding (or at any time
+    via /invite) to link both accounts into a family unit.
+
+    Scenarios:
+    - Mom runs /invite first → code created, partner enters it during onboarding
+    - Partner runs /invite first → code created, mom enters it later
+    - Either role can initiate — whoever goes second uses the other's code
     """
     assert update.message is not None
     assert update.effective_user is not None
@@ -1011,15 +1063,7 @@ async def cmd_invite(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             )
             return
 
-        # Only mom role can generate invite codes
-        if user.role != UserRole.mom:
-            await update.message.reply_text(
-                "Invite codes are generated by the mom account. "
-                "Ask your partner to use /invite on their account."
-            )
-            return
-
-        # Check if user already has a family unit with an unused code
+        # Check if user already has a family unit
         if user.family_unit_id is not None:
             fu_result = await session.execute(
                 select(FamilyUnit).where(FamilyUnit.id == user.family_unit_id)
@@ -1028,15 +1072,16 @@ async def cmd_invite(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             if existing_fu is not None:
                 if existing_fu.invite_used:
                     await update.message.reply_text(
-                        "✅ Your partner is already linked to your account!\n\n"
-                        "You're connected as a family unit."
+                        "✅ Your accounts are already linked as a family unit!\n\n"
+                        "You're all connected."
                     )
                 else:
+                    # Show the existing unused code
                     await update.message.reply_text(
                         f"🔗 Your invite code is:\n\n"
                         f"*`{existing_fu.invite_code}`*\n\n"
-                        f"Share this with your partner — they enter it during "
-                        f"their Famosi setup to link your accounts.",
+                        f"Share this with your partner. When they set up Famosi, "
+                        f"they enter this code to link your accounts.",
                         parse_mode="Markdown",
                     )
                 return
@@ -1056,7 +1101,8 @@ async def cmd_invite(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             await update.message.reply_text("❌ Could not generate a code right now. Please try again.")
             return
 
-        # Create the FamilyUnit and link mom
+        # Create the FamilyUnit and link creator.
+        # mom_user_id stores the first person to create the unit (regardless of role).
         family_unit = FamilyUnit(invite_code=code, mom_user_id=user.id)
         session.add(family_unit)
         await session.flush()  # get family_unit.id
@@ -1068,13 +1114,16 @@ async def cmd_invite(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             "invite_code_generated",
             telegram_user_id=telegram_user_id,
             family_unit_id=family_unit.id,
+            role=user.role.value if hasattr(user.role, "value") else str(user.role),
         )
 
+    other_role = "partner" if (user.role == UserRole.mom) else "partner/mom"
     await update.message.reply_text(
         f"🔗 Your family invite code is:\n\n"
         f"*`{code}`*\n\n"
-        f"Send this to your partner. When they set up Famosi, they enter this "
-        f"code to link your accounts and see your shared pregnancy journey.",
+        f"Send this to your {other_role}. When they set up Famosi, they enter "
+        f"this code to link your accounts and see your shared pregnancy journey.\n\n"
+        f"They can also link after setup by sending /invite and entering your code.",
         parse_mode="Markdown",
     )
 

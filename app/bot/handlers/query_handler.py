@@ -373,7 +373,7 @@ async def handle_query_intent(
     user_id: int | None = None
     requesting_role: str = "mom"  # safe default
 
-    if context.bot_data and isinstance(context.bot_data.get("current_user"), object):
+    if context.bot_data and context.bot_data.get("current_user") is not None:
         user_obj = context.bot_data.get("current_user")
         user_id = getattr(user_obj, "id", None)
         raw_role = getattr(user_obj, "role", None)

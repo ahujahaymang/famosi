@@ -395,7 +395,7 @@ async def dispatch(
 
     # Extract user_id from context bot_data if set by auth middleware
     user_id: int | None = None
-    if context.bot_data and isinstance(context.bot_data.get("current_user"), object):
+    if context.bot_data and context.bot_data.get("current_user") is not None:
         user_obj = context.bot_data.get("current_user")
         user_id = getattr(user_obj, "id", None)
 

@@ -259,7 +259,7 @@ class TestConfirmReset:
 class TestHandleRole:
 
     @pytest.mark.asyncio
-    async def test_mom_role_goes_to_due_date(self):
+    async def test_mom_role_goes_to_invite_code(self):
         from app.bot.handlers.onboarding import handle_role
 
         update = _make_update(callback_data="role:mom")
@@ -268,10 +268,9 @@ class TestHandleRole:
         with patch("app.bot.handlers.onboarding._save_state", new_callable=AsyncMock):
             state = await handle_role(update, context)
 
-        assert state == DUE_DATE_OR_LMP
-        update.callback_query.edit_message_text.assert_awaited_once()
+        assert state == INVITE_CODE
         text = update.callback_query.edit_message_text.call_args.args[0]
-        assert "due date" in text.lower()
+        assert "invite" in text.lower() or "code" in text.lower() or "link" in text.lower()
 
     @pytest.mark.asyncio
     async def test_partner_role_goes_to_invite_code(self):
@@ -530,11 +529,14 @@ class TestLinkPartnerToFamily:
 class TestCmdInvite:
 
     @pytest.mark.asyncio
-    async def test_non_mom_cannot_generate_code(self):
+    async def test_partner_can_generate_code(self):
+        """Both mom and partner can generate invite codes."""
         from app.bot.handlers.onboarding import cmd_invite
         from app.models.user import User, UserRole
+        from app.models.family_unit import FamilyUnit
 
         mock_user = MagicMock(spec=User)
+        mock_user.id = 1
         mock_user.onboarding_complete = True
         mock_user.role = UserRole.partner
         mock_user.family_unit_id = None
@@ -542,18 +544,28 @@ class TestCmdInvite:
         update = _make_update(text="/invite")
         context = _make_context()
 
+        results_iter = iter([
+            MagicMock(**{"scalar_one_or_none.return_value": mock_user}),
+            MagicMock(**{"scalar_one_or_none.return_value": None}),  # no collision
+        ])
+
         with patch("app.bot.handlers.onboarding._AsyncSessionFactory") as mock_factory:
             mock_session = AsyncMock()
+            mock_session.execute = AsyncMock(side_effect=lambda *a, **kw: next(results_iter))
+            mock_session.flush = AsyncMock()
+            mock_session.commit = AsyncMock()
+            mock_session.add = MagicMock()
             mock_factory.return_value.__aenter__ = AsyncMock(return_value=mock_session)
             mock_factory.return_value.__aexit__ = AsyncMock(return_value=False)
-            mock_result = MagicMock()
-            mock_result.scalar_one_or_none.return_value = mock_user
-            mock_session.execute = AsyncMock(return_value=mock_result)
 
             await cmd_invite(update, context)
 
-        text = update.message.reply_text.call_args.args[0]
-        assert "partner" in text.lower() or "mom" in text.lower()
+        text = update.message.reply_text.call_args.kwargs.get(
+            "text", update.message.reply_text.call_args.args[0]
+        )
+        # Should show a code, not an error
+        assert "invite" in text.lower() or "code" in text.lower()
+        mock_session.add.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_unregistered_user_cannot_generate_code(self):

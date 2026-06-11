@@ -1,0 +1,25 @@
+{
+  "name": "famosi-infra",
+  "version": "1.0.0",
+  "description": "CDK infrastructure for Famosi — single EC2 with local PostgreSQL",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w",
+    "cdk": "npx cdk",
+    "deploy": "npx cdk deploy",
+    "destroy": "npx cdk destroy",
+    "diff": "npx cdk diff",
+    "synth": "npx cdk synth",
+    "bootstrap": "npx cdk bootstrap"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "^2.140.0",
+    "constructs": "^10.3.0"
+  },
+  "devDependencies": {
+    "aws-cdk": "^2.140.0",
+    "typescript": "^5.4.0",
+    "@types/node": "^20.0.0",
+    "ts-node": "^10.9.0"
+  }
+}
