@@ -76,15 +76,28 @@ logger = structlog.get_logger(__name__)
 # Each tuple: (keywords, record_type)
 # Order matters: more specific rules first to avoid false-positive matches.
 _KEYWORD_RULES: list[tuple[tuple[str, ...], str]] = [
-    (("question", "ask", "doctor", "appointment", "want to know"), "question"),
+    # question/doctor — explicit ask for doctor, NOT appointment scheduling
+    (("ask doctor", "question for doctor", "ask my doctor", "want to ask"), "question"),
     (("symptom", "nausea", "nauseous", "pain", "headache", "cramp", "backache", "dizzy", "tired", "vomit", "ache"), "symptom"),
-    (("exercise", "workout", "walk", "yoga", "swim", "run"), "exercise"),
+    (("exercise", "workout", "yoga", "swim", "run"), "exercise"),
+    (("walked", "walking"), "exercise"),
     (("medication", "medicine", "pill", "tablet", "supplement", "vitamin", "folic"), "medication"),
     (("weight", "weigh", "kg", "lbs", "pounds"), "weight"),
     (("water", "drink", "hydrat", "ml", "oz", "glass", "glasses", "litre", "litres", "liter", "liters", "cup", "cups"), "water"),
     (("prefer", "allergy", "allergic", "avoid", "dislike", "vegetarian", "vegan", "meat", "shellfish"), "preference"),
     (("meal", "food", "ate", "eat", "breakfast", "lunch", "dinner"), "meal"),
 ]
+
+# Keywords that indicate the user wants to schedule an appointment or reminder
+# — these should NOT be processed by the logging handler; redirect them.
+_APPOINTMENT_KEYWORDS: tuple[str, ...] = (
+    "appointment", "scan", "ultrasound", "ob visit", "bloodwork",
+    "schedule", "book a",
+)
+_REMINDER_KEYWORDS: tuple[str, ...] = (
+    "remind", "reminder", "set a reminder", "set reminder",
+    "add a reminder", "alert me",
+)
 
 # Labels for the visibility levels shown to the user
 _VISIBILITY_LABELS: dict[str, str] = {
@@ -428,6 +441,29 @@ async def handle_logging_intent(
 
     telegram_user_id = update.effective_user.id
     user_message: str = (update.message.text or "").strip()
+
+    # ------------------------------------------------------------------
+    # Redirect appointment / reminder messages to the correct handlers.
+    # These are correctly classified as LOGGING by the intent router, but
+    # the logging handler only handles health records. Appointments and
+    # reminders have their own ConversationHandlers (/appointments, /reminders).
+    # ------------------------------------------------------------------
+    lower_msg = user_message.lower()
+    if any(kw in lower_msg for kw in _REMINDER_KEYWORDS):
+        await update.message.reply_text(
+            "⏰ To set a reminder, use /reminders — then tap *Create* and I'll "
+            "walk you through it step by step.",
+            parse_mode="Markdown",
+        )
+        return {"model_used": None, "tokens_used": None}
+
+    if any(kw in lower_msg for kw in _APPOINTMENT_KEYWORDS):
+        await update.message.reply_text(
+            "📅 To schedule an appointment, use /appointments — then tap *Create* "
+            "and I'll guide you through it.",
+            parse_mode="Markdown",
+        )
+        return {"model_used": None, "tokens_used": None}
 
     # Resolve the record type
     record_type = _determine_record_type(user_message, route_result)
@@ -891,6 +927,20 @@ def get_handlers() -> list:
             handle_edit_message,
         ),
     ]
+
+
+def register(application: Any) -> None:
+    """
+    Register all logging-related handlers on *application*.
+
+    Called from ``app.main._register_handlers``.
+    Registers the confirm, visibility, and edit handlers returned by
+    ``get_handlers()``.
+    """
+    from telegram.ext import Application as _Application  # noqa: PLC0415
+    for handler in get_handlers():
+        application.add_handler(handler)
+    logger.debug("logging_handlers_registered")
 
 
 __all__ = [

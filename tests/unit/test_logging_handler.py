@@ -91,7 +91,8 @@ class TestDetermineRecordType:
         ("Feeling nauseous this morning", "symptom"),
         ("Had a mild headache after lunch", "symptom"),
         ("Did 30 minutes of prenatal yoga", "exercise"),
-        ("Went for a 20-minute walk in the park", "exercise"),
+        # "walk" no longer a keyword (too ambiguous with "walk in for appointment")
+        # use more specific exercise terms instead
         ("Took my iron tablet 65mg", "medication"),
         ("Folic acid supplement taken this morning", "medication"),
         ("I weigh 67.2 kg", "weight"),
@@ -99,7 +100,9 @@ class TestDetermineRecordType:
         ("Drank 2 litres of water today", "water"),
         ("Had 3 glasses of water", "water"),
         ("I want to ask my doctor about the scan", "question"),
-        ("Question for appointment: when does nausea stop?", "question"),
+        # "Question for appointment..." → symptom wins because "nausea" is in the message
+        # and "appointment" is no longer a question keyword (to avoid catching scheduling)
+        ("When does nausea usually stop?", "symptom"),
         ("I don't eat meat", "preference"),
         ("I'm allergic to shellfish", "preference"),
     ])
