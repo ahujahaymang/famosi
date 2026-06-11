@@ -238,10 +238,11 @@ class TestIntentRoutingScenarios:
 # 2. Logging handler — appointment/reminder redirect (the new fix)
 # ===========================================================================
 
-class TestLoggingHandlerRedirect:
+class TestLoggingHandlerScheduling:
+    """Appointment and reminder messages now go through the logging pipeline, not a redirect."""
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("message,keyword", [
+    @pytest.mark.parametrize("message,expected_type", [
         ("Add a reminder for my scan tomorrow", "reminder"),
         ("Remind me to take iron at 9am", "reminder"),
         ("Set a reminder for ultrasound at 10:30am", "reminder"),
@@ -249,23 +250,16 @@ class TestLoggingHandlerRedirect:
         ("Schedule an ob visit for next Friday", "appointment"),
         ("I have an ultrasound tomorrow morning", "appointment"),
     ])
-    async def test_appointment_reminder_redirected(self, message: str, keyword: str):
-        from app.bot.handlers.logging_handler import handle_logging_intent
+    async def test_appointment_reminder_extracted_not_redirected(
+        self, message: str, expected_type: str
+    ):
+        """Appointment/reminder messages are now extracted by the LLM, not redirected."""
+        from app.bot.handlers.logging_handler import _determine_record_type
 
-        update = _make_update(text=message)
-        context = _make_context()
         route_result = MagicMock()
-        client = MagicMock()
-
-        result = await handle_logging_intent(update, context, client, route_result)
-
-        assert result == {"model_used": None, "tokens_used": None}
-        update.message.reply_text.assert_awaited_once()
-        reply_text = update.message.reply_text.call_args.args[0].lower()
-        if keyword == "reminder":
-            assert "/reminders" in reply_text
-        else:
-            assert "/appointments" in reply_text
+        route_result.record_type = None
+        result = _determine_record_type(message, route_result)
+        assert result == expected_type
 
 
 # ===========================================================================

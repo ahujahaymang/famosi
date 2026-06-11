@@ -62,6 +62,8 @@ _VALID_RECORD_TYPES: frozenset[str] = frozenset(
         "water_log",
         "doctor_question",
         "preference",
+        "appointment",
+        "reminder",
     }
 )
 
@@ -75,13 +77,16 @@ _DEFAULT_LOOKBACK_DAYS: int = 7
 _QUERY_PARAM_SYSTEM_PROMPT = """\
 You are a query parameter extractor for a pregnancy health tracking assistant.
 
-The user wants to retrieve their personal health records.
+The user wants to retrieve their personal health records or scheduled items.
 Extract the following two parameters from their message:
 
-1. "record_type": The type of health record they want to see.
+1. "record_type": The type of record they want to see.
    Must be exactly one of:
    meal, symptom, exercise, medication, weight_log, water_log,
-   doctor_question, preference
+   doctor_question, preference, appointment, reminder
+
+   Use "appointment" for: upcoming appointments, scans, doctor visits, etc.
+   Use "reminder" for: scheduled reminders, alerts, notifications.
 
 2. "date_range": An object with optional "start" and "end" dates.
    Both dates are in ISO-8601 format (YYYY-MM-DD).
@@ -90,13 +95,12 @@ Extract the following two parameters from their message:
    If the user says "today", use today's date for both.
    If the user says "yesterday", use yesterday's date for both.
    If the user says "this week" or "last 7 days", set start to 7 days ago and end to today.
-   If the user says "last month" or "past month", set start to 30 days ago and end to today.
+   If the user says "upcoming" or "coming up", set start to today and end to 30 days from now.
    If no date range is mentioned, omit both "start" and "end" (or set to null).
 
 Rules:
 - Respond with a single valid JSON object and nothing else.
 - Do NOT fabricate dates that were not implied by the message.
-- Use today's date only when the user explicitly asks for "today" or "recent" data.
 """
 
 
@@ -247,6 +251,19 @@ def _serialize_records(record_type: str, records: list[Any]) -> str:
             elif record_type == "preference":
                 attrs["preference_type"] = getattr(rec, "preference_type", "")
                 attrs["food_item"] = getattr(rec, "food_item", "")
+                attrs["active"] = getattr(rec, "active", "")
+
+            elif record_type == "appointment":
+                attrs["appointment_at"] = getattr(rec, "appointment_at", "")
+                attrs["appointment_type"] = getattr(rec, "appointment_type", "")
+                attrs["location"] = getattr(rec, "location", "")
+                attrs["notes"] = getattr(rec, "notes", "")
+                attrs["cancelled"] = getattr(rec, "cancelled", False)
+
+            elif record_type == "reminder":
+                attrs["scheduled_at"] = getattr(rec, "scheduled_at", "")
+                attrs["reminder_type"] = getattr(rec, "reminder_type", "")
+                attrs["message_text"] = getattr(rec, "message_text", "")
                 attrs["active"] = getattr(rec, "active", "")
 
             else:
@@ -429,21 +446,41 @@ async def handle_query_intent(
     )
 
     # ------------------------------------------------------------------
-    # Step 2: Fetch records from Personal_Memory with visibility filter
+    # Step 2: Fetch records from the appropriate store with visibility filter
     # NOTE: Knowledge_Base is NEVER queried here (Req 14.3)
     # ------------------------------------------------------------------
     records: list[Any] = []
     try:
-        async with _AsyncSessionFactory() as db:
-            records = await personal_memory.get_records(
-                db=db,
-                user_id=user_id,
-                record_type=record_type,
-                start=start_dt,
-                end=end_dt,
-                requesting_user_id=user_id,
-                requesting_role=requesting_role,
-            )
+        if record_type == "appointment":
+            from app.components import appointment_tracker  # noqa: PLC0415
+            from app.models.appointment import Appointment  # noqa: PLC0415
+            from sqlalchemy import select  # noqa: PLC0415
+            async with _AsyncSessionFactory() as db:
+                # Fetch future non-cancelled appointments
+                result = await db.execute(
+                    select(Appointment)
+                    .where(
+                        Appointment.user_id == user_id,
+                        Appointment.cancelled.is_(False),
+                    )
+                    .order_by(Appointment.appointment_at.asc())
+                )
+                records = list(result.scalars().all())
+        elif record_type == "reminder":
+            from app.components import reminder_system  # noqa: PLC0415
+            async with _AsyncSessionFactory() as db:
+                records = await reminder_system.list_reminders(user_id, db, active_only=True)
+        else:
+            async with _AsyncSessionFactory() as db:
+                records = await personal_memory.get_records(
+                    db=db,
+                    user_id=user_id,
+                    record_type=record_type,
+                    start=start_dt,
+                    end=end_dt,
+                    requesting_user_id=user_id,
+                    requesting_role=requesting_role,
+                )
     except ValueError as exc:
         # Unknown record_type — should not happen since we validated above,
         # but handle defensively.

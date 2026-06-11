@@ -157,7 +157,7 @@ def _clear_data(context: ContextTypes.DEFAULT_TYPE) -> None:
 async def _get_user(context: ContextTypes.DEFAULT_TYPE) -> User | None:
     """Retrieve the User ORM object from bot_data (set by auth middleware)."""
     if context.bot_data:
-        return context.bot_data.get("user")
+        return context.bot_data.get("current_user")
     return None
 
 

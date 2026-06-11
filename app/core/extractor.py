@@ -24,11 +24,13 @@ import structlog
 from pydantic import BaseModel, ValidationError
 
 from app.core.llm_client import LLMClient
+from app.schemas.appointment import AppointmentExtraction
 from app.schemas.exercise import ExerciseExtraction
 from app.schemas.meal import MealExtraction
 from app.schemas.medication import MedicationExtraction
 from app.schemas.preference import PreferenceExtraction
 from app.schemas.question import DoctorQuestionExtraction
+from app.schemas.reminder import ReminderExtraction
 from app.schemas.symptom import SymptomExtraction
 from app.schemas.water import WaterExtraction
 from app.schemas.weight import WeightExtraction
@@ -48,6 +50,8 @@ RecordType = Literal[
     "water",
     "question",
     "preference",
+    "appointment",
+    "reminder",
 ]
 
 # Map each record type to its Pydantic extraction schema class
@@ -60,6 +64,8 @@ _SCHEMA_MAP: dict[str, Type[BaseModel]] = {
     "water": WaterExtraction,
     "question": DoctorQuestionExtraction,
     "preference": PreferenceExtraction,
+    "appointment": AppointmentExtraction,
+    "reminder": ReminderExtraction,
 }
 
 # ---------------------------------------------------------------------------
@@ -91,6 +97,8 @@ _SYSTEM_PROMPT_TEMPLATE = """You are a precise data extraction assistant for a p
 
 Extract the following structured information from the user's message.
 
+Today's date (UTC): {today}
+
 Target schema (JSON Schema):
 {json_schema}
 
@@ -100,13 +108,16 @@ Rules:
 - If a required field cannot be determined from the message, omit it from the response (do not guess or fabricate values).
 - Use metric or stated units exactly as given by the user.
 - All string values must be non-empty.
+- For date/time fields: interpret relative terms (tomorrow, next Friday, this evening) relative to today's date shown above.
 """
 
 
 def _build_system_prompt(schema_class: Type[BaseModel]) -> str:
-    """Return a system prompt with the target schema's JSON Schema embedded."""
+    """Return a system prompt with the target schema's JSON Schema and today's date embedded."""
+    from datetime import date as _date  # noqa: PLC0415
     json_schema = json.dumps(schema_class.model_json_schema(), indent=2)
-    return _SYSTEM_PROMPT_TEMPLATE.format(json_schema=json_schema)
+    today = _date.today().strftime("%Y-%m-%d (%A)")
+    return _SYSTEM_PROMPT_TEMPLATE.format(json_schema=json_schema, today=today)
 
 
 # ---------------------------------------------------------------------------

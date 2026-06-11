@@ -76,8 +76,12 @@ logger = structlog.get_logger(__name__)
 # Each tuple: (keywords, record_type)
 # Order matters: more specific rules first to avoid false-positive matches.
 _KEYWORD_RULES: list[tuple[tuple[str, ...], str]] = [
-    # question/doctor — explicit ask for doctor, NOT appointment scheduling
+    # question/doctor — explicit ask for doctor
     (("ask doctor", "question for doctor", "ask my doctor", "want to ask"), "question"),
+    # reminder creation — check BEFORE appointment (remind me to... for my scan → reminder)
+    (("remind me", "reminder", "set a reminder", "add a reminder", "alert me", "notify me"), "reminder"),
+    # appointment scheduling
+    (("appointment", "scan", "ultrasound", "ob visit", "bloodwork", "schedule a", "book a"), "appointment"),
     (("symptom", "nausea", "nauseous", "pain", "headache", "cramp", "backache", "dizzy", "tired", "vomit", "ache"), "symptom"),
     (("exercise", "workout", "yoga", "swim", "run"), "exercise"),
     (("walked", "walking"), "exercise"),
@@ -87,17 +91,6 @@ _KEYWORD_RULES: list[tuple[tuple[str, ...], str]] = [
     (("prefer", "allergy", "allergic", "avoid", "dislike", "vegetarian", "vegan", "meat", "shellfish"), "preference"),
     (("meal", "food", "ate", "eat", "breakfast", "lunch", "dinner"), "meal"),
 ]
-
-# Keywords that indicate the user wants to schedule an appointment or reminder
-# — these should NOT be processed by the logging handler; redirect them.
-_APPOINTMENT_KEYWORDS: tuple[str, ...] = (
-    "appointment", "scan", "ultrasound", "ob visit", "bloodwork",
-    "schedule", "book a",
-)
-_REMINDER_KEYWORDS: tuple[str, ...] = (
-    "remind", "reminder", "set a reminder", "set reminder",
-    "add a reminder", "alert me",
-)
 
 # Labels for the visibility levels shown to the user
 _VISIBILITY_LABELS: dict[str, str] = {
@@ -266,6 +259,26 @@ def _format_summary(record_type: str, record: BaseModel) -> str:
         assert isinstance(record, PreferenceExtraction)
         return f"🥗 Preference: {record.preference_type} - {record.food_item}"
 
+    elif record_type == "appointment":
+        from app.schemas.appointment import AppointmentExtraction
+        assert isinstance(record, AppointmentExtraction)
+        type_labels = {"ob_visit": "OB Visit 👩‍⚕️", "ultrasound": "Ultrasound 🔊", "bloodwork": "Bloodwork 🩸"}
+        label = type_labels.get(record.appointment_type, record.appointment_type)
+        lines = [f"📅 Appointment: {label}", f"   🗓 {record.datetime_str}"]
+        if record.location:
+            lines.append(f"   📍 {record.location}")
+        if record.notes:
+            lines.append(f"   📝 {record.notes}")
+        return "\n".join(lines)
+
+    elif record_type == "reminder":
+        from app.schemas.reminder import ReminderExtraction
+        assert isinstance(record, ReminderExtraction)
+        type_labels = {"vitamin": "💊 Vitamin", "meal": "🍽️ Meal", "water": "💧 Water", "exercise": "🏃 Exercise", "appointment": "📅 Appointment"}
+        label = type_labels.get(record.reminder_type, record.reminder_type)
+        recurring = " (daily)" if record.is_recurring else ""
+        return f"⏰ Reminder: {label}{recurring}\n   🕐 {record.datetime_str}\n   📝 {record.message}"
+
     else:
         # Unknown type — surface all fields generically
         try:
@@ -367,6 +380,61 @@ async def _persist_record(
                 obj = await personal_memory.create_preference(
                     db, record, user_id, logged_at
                 )
+            elif record_type == "appointment":
+                from app.schemas.appointment import AppointmentExtraction  # noqa: PLC0415
+                from app.components import appointment_tracker  # noqa: PLC0415
+                from datetime import datetime as _dt, timezone as _tz  # noqa: PLC0415
+                assert isinstance(record, AppointmentExtraction)
+                # Parse the datetime string extracted by the LLM
+                appt_dt = None
+                for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M", "%Y-%m-%d"):
+                    try:
+                        appt_dt = _dt.strptime(record.datetime_str.strip(), fmt).replace(tzinfo=_tz.utc)
+                        break
+                    except ValueError:
+                        continue
+                if appt_dt is None:
+                    logger.warning("logging_handler_appointment_datetime_parse_failed")
+                    return None
+                obj = await appointment_tracker.create_appointment(
+                    user_id=user_id,
+                    appointment_type=record.appointment_type,
+                    appointment_at=appt_dt,
+                    location=record.location,
+                    notes=record.notes,
+                    db=db,
+                )
+            elif record_type == "reminder":
+                from app.schemas.reminder import ReminderExtraction  # noqa: PLC0415
+                from app.components import reminder_system  # noqa: PLC0415
+                from datetime import datetime as _dt  # noqa: PLC0415
+                from app.dependencies import _AsyncSessionFactory as _SF  # noqa: PLC0415, F401
+                assert isinstance(record, ReminderExtraction)
+                # Parse datetime — extractor injects today's date for relative times
+                rem_dt = None
+                for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M", "%Y-%m-%d"):
+                    try:
+                        rem_dt = _dt.strptime(record.datetime_str.strip(), fmt)
+                        break
+                    except ValueError:
+                        continue
+                if rem_dt is None:
+                    logger.warning("logging_handler_reminder_datetime_parse_failed")
+                    return None
+                # Get timezone from user object in the outer session
+                # We need to fetch it from the DB since we only have user_id here
+                from sqlalchemy import select as _select  # noqa: PLC0415
+                from app.models.user import User as _User  # noqa: PLC0415
+                tz_result = await db.execute(_select(_User.timezone).where(_User.id == user_id))
+                tz_name = tz_result.scalar_one_or_none()
+                obj = await reminder_system.create_reminder(
+                    user_id=user_id,
+                    reminder_type=record.reminder_type,
+                    local_time=rem_dt,
+                    message_text=record.message,
+                    db=db,
+                    timezone_name=tz_name,
+                )
             else:
                 logger.warning(
                     "logging_handler_unknown_record_type",
@@ -441,29 +509,6 @@ async def handle_logging_intent(
 
     telegram_user_id = update.effective_user.id
     user_message: str = (update.message.text or "").strip()
-
-    # ------------------------------------------------------------------
-    # Redirect appointment / reminder messages to the correct handlers.
-    # These are correctly classified as LOGGING by the intent router, but
-    # the logging handler only handles health records. Appointments and
-    # reminders have their own ConversationHandlers (/appointments, /reminders).
-    # ------------------------------------------------------------------
-    lower_msg = user_message.lower()
-    if any(kw in lower_msg for kw in _REMINDER_KEYWORDS):
-        await update.message.reply_text(
-            "⏰ To set a reminder, use /reminders — then tap *Create* and I'll "
-            "walk you through it step by step.",
-            parse_mode="Markdown",
-        )
-        return {"model_used": None, "tokens_used": None}
-
-    if any(kw in lower_msg for kw in _APPOINTMENT_KEYWORDS):
-        await update.message.reply_text(
-            "📅 To schedule an appointment, use /appointments — then tap *Create* "
-            "and I'll guide you through it.",
-            parse_mode="Markdown",
-        )
-        return {"model_used": None, "tokens_used": None}
 
     # Resolve the record type
     record_type = _determine_record_type(user_message, route_result)
@@ -626,7 +671,20 @@ async def handle_confirm_callback(
             record_id=record_id,
         )
 
-        # Confirm saved, then offer visibility upgrade (Req 6.2)
+        # Confirm saved, then offer visibility upgrade for health records only.
+        # Appointments and reminders don't have visibility levels.
+        _NO_VISIBILITY_TYPES = {"appointment", "reminder"}
+        if record_type in _NO_VISIBILITY_TYPES:
+            # For appointment: remind user about auto-set reminders
+            if record_type == "appointment":
+                await query.edit_message_text(
+                    "✅ Appointment saved! Reminders set for 24h and 1h before. 🔔",
+                    parse_mode="Markdown",
+                )
+            else:
+                await query.edit_message_text("✅ Reminder set! 🔔")
+            return
+
         await query.edit_message_text("✅ Saved!")
 
         # Store record info for the visibility callback
