@@ -57,16 +57,17 @@ _NO_GUIDANCE_MESSAGE = (
 _KNOWLEDGE_SYSTEM_PROMPT_TEMPLATE = """\
 You are Famosi, a knowledgeable and empathetic pregnancy assistant.
 
-Answer the user's question using ONLY the context passages provided below.
-Do not invent information that is not present in the context.
-If the context does not contain enough information to answer confidently,
-say so clearly and recommend the user speak with their healthcare provider.
+The user is currently {gestational_context}.
+
+Answer the user's question using the context passages below where relevant.
+If the context passages don't cover the question, use your general pregnancy
+knowledge — especially their gestational stage — to give a helpful answer.
+Do not say you cannot help.
 
 Guidelines:
 - Be warm, clear, and concise — this is a Telegram message.
-- Cite the source name (e.g. ACOG, WHO, NHS, CDC) when relevant.
-- Do NOT include any medical disclaimers beyond recommending a healthcare
-  provider when uncertain.
+- Cite the source name (e.g. ACOG, WHO, NHS, CDC) when the context is relevant.
+- Tailor your answer to their gestational stage where appropriate.
 - Keep the response under 400 words.
 
 --- CONTEXT PASSAGES ---
@@ -203,9 +204,15 @@ async def handle_knowledge_intent(
 
     # ------------------------------------------------------------------
     # Step 4 — compose grounded response via the reasoning tier (Req 14.4)
+    # Always inject gestational context so the model can personalise even
+    # when RAG chunks are available.
     # ------------------------------------------------------------------
+    gestational_context = _build_gestational_context(user_obj)
     context_text = _build_context_text(chunks)
-    system_prompt = _KNOWLEDGE_SYSTEM_PROMPT_TEMPLATE.format(context=context_text)
+    system_prompt = _KNOWLEDGE_SYSTEM_PROMPT_TEMPLATE.format(
+        gestational_context=gestational_context,
+        context=context_text,
+    )
 
     messages = [
         {"role": "system", "content": system_prompt},
@@ -232,9 +239,38 @@ async def handle_knowledge_intent(
 # Helpers
 # ---------------------------------------------------------------------------
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+def _build_gestational_context(user_obj: Any) -> str:
+    """
+    Build a gestational context string from the user's profile.
+
+    Returns a human-readable string like "8 weeks and 3 days pregnant"
+    or "pregnant" as a safe default when no date is available.
+    Used in both RAG and fallback system prompts so the model always knows
+    where the user is in their pregnancy.
+    """
+    from datetime import date, timedelta
+    from app.components.pregnancy_engine import calculate_gestational_age
+
+    if user_obj is None:
+        return "pregnant"
+
+    due_date = getattr(user_obj, "due_date", None)
+    lmp_date = getattr(user_obj, "lmp_date", None)
+    try:
+        if due_date:
+            weeks, days = calculate_gestational_age(due_date, date.today())
+            return f"{weeks} weeks and {days} days pregnant (due {due_date})"
+        elif lmp_date:
+            estimated_due = lmp_date + timedelta(days=280)
+            weeks, days = calculate_gestational_age(estimated_due, date.today())
+            return (
+                f"approximately {weeks} weeks and {days} days pregnant "
+                f"(estimated due date {estimated_due})"
+            )
+    except Exception:
+        pass
+    return "pregnant"
+
 
 async def _llm_fallback(
     user_message: str,
@@ -246,27 +282,7 @@ async def _llm_fallback(
     Answer the question using the LLM's own knowledge when RAG has no chunks.
     Injects the user's gestational stage to personalise the response.
     """
-    from datetime import date
-    from app.components.pregnancy_engine import calculate_gestational_age
-
-    # Build gestational context string
-    gestational_context = "pregnant"
-    if user_obj is not None:
-        due_date = getattr(user_obj, "due_date", None)
-        lmp_date = getattr(user_obj, "lmp_date", None)
-        try:
-            if due_date:
-                weeks, days = calculate_gestational_age(due_date, date.today())
-                gestational_context = f"{weeks} weeks and {days} days pregnant"
-            elif lmp_date:
-                # Estimate due date from LMP
-                from datetime import timedelta
-                estimated_due = lmp_date + timedelta(days=280)
-                weeks, days = calculate_gestational_age(estimated_due, date.today())
-                gestational_context = f"approximately {weeks} weeks and {days} days pregnant"
-        except Exception:
-            pass  # fall back to generic string
-
+    gestational_context = _build_gestational_context(user_obj)
     system_prompt = _FALLBACK_SYSTEM_PROMPT_TEMPLATE.format(
         gestational_context=gestational_context
     )

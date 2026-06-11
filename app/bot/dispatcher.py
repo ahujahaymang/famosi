@@ -414,6 +414,16 @@ async def dispatch(
         return
 
     # ------------------------------------------------------------------
+    # Gate: no user in DB → they're still onboarding (or unregistered).
+    # The ConversationHandler at group 0 handles them; we must not fire.
+    # Silently return so the thinking message is never sent and no error
+    # is shown while onboarding steps are in progress.
+    # ------------------------------------------------------------------
+    if context.bot_data and context.bot_data.get("current_user") is None:
+        log.debug("dispatch_skipped_no_user")
+        return
+
+    # ------------------------------------------------------------------
     # Show "Thinking..." immediately so the user knows we're working.
     # We edit this message in-place once we have the real reply.
     # ------------------------------------------------------------------

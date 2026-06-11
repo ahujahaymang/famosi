@@ -404,15 +404,14 @@ async def handle_query_intent(
     )
 
     if record_type is None:
-        log.warning("query_handler_could_not_extract_record_type")
-        fallback_text = (
-            "I wasn't sure which records you were asking about. "
-            "You can ask me things like:\n"
-            "- 'What symptoms did I log this week?'\n"
-            "- 'Show my meals from yesterday'\n"
-            "- 'What medications have I logged?'"
+        # Can't map the question to a health record type — route it through
+        # the knowledge handler's RAG+LLM path so the user gets a real answer
+        # (e.g. "how far are we?" uses gestational context from the profile).
+        log.info("query_handler_no_record_type_falling_through_to_knowledge")
+        from app.bot.handlers.knowledge_handler import handle_knowledge_intent  # noqa: PLC0415
+        return await handle_knowledge_intent(
+            update, context, llm_client, route_result, user_message
         )
-        return fallback_text, {"model_used": nano_model, "tokens_used": None}
 
     # Apply default date range when the user didn't specify one
     if start_dt is None or end_dt is None:
