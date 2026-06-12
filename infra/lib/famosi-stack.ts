@@ -160,32 +160,36 @@ export class FamosiStack extends cdk.Stack {
       'dnf install -y python3.11 python3.11-pip git gcc make',
 
       // ── PostgreSQL 16 + pgvector ─────────────────────────────────────
-      // Add PostgreSQL 16 repo for AL2023
-      'dnf install -y https://download.postgresql.org/pub/repos/yum/reporpms/EL-9-x86_64/pgdg-redhat-repo-latest.noarch.rpm || true',
-      'dnf -qy module disable postgresql || true',
-      'dnf install -y postgresql16-server postgresql16-contrib postgresql16-devel',
+      // Amazon Linux 2023 ships postgres via its own package manager.
+      // We use the AL2023 built-in postgres16 packages (no PGDG repo needed).
+      'dnf install -y postgresql16-server postgresql16-contrib',
 
-      // Install pgvector from source (not in the PGDG repo for AL2023 yet)
-      'dnf install -y git gcc make postgresql16-devel',
+      // pg_config location on AL2023
+      'PG_CONFIG=$(find /usr -name pg_config 2>/dev/null | head -1)',
+      'echo "pg_config at: $PG_CONFIG"',
+
+      // Install pgvector from source
+      'dnf install -y git gcc make postgresql16-devel || dnf install -y git gcc make postgresql-devel',
       'git clone --branch v0.7.0 https://github.com/pgvector/pgvector.git /tmp/pgvector',
-      'cd /tmp/pgvector && make PG_CONFIG=/usr/pgsql-16/bin/pg_config && make install PG_CONFIG=/usr/pgsql-16/bin/pg_config',
+      'cd /tmp/pgvector && make PG_CONFIG=$PG_CONFIG && make install PG_CONFIG=$PG_CONFIG',
 
       // Initialise the cluster
-      '/usr/pgsql-16/bin/postgresql-16-setup initdb',
-      'systemctl enable postgresql-16',
-      'systemctl start postgresql-16',
+      'postgresql-setup --initdb || /usr/bin/postgresql-setup --initdb || true',
+      'systemctl enable postgresql',
+      'systemctl start postgresql',
 
-      // Create DB and user
-      `sudo -u postgres psql -c "CREATE USER famosi WITH PASSWORD 'famosi_local' CREATEDB;"`,
-      `sudo -u postgres psql -c "CREATE DATABASE famosi OWNER famosi;"`,
-      `sudo -u postgres psql -d famosi -c "CREATE EXTENSION IF NOT EXISTS vector;"`,
+      // Create DB and user (postgres service name varies on AL2023)
+      `sudo -u postgres psql -c "CREATE USER famosi WITH PASSWORD 'famosi_local' CREATEDB;" || true`,
+      `sudo -u postgres psql -c "CREATE DATABASE famosi OWNER famosi;" || true`,
+      `sudo -u postgres psql -d famosi -c "CREATE EXTENSION IF NOT EXISTS vector;" || true`,
 
       // Allow local TCP connections (needed by asyncpg)
-      `sed -i "s/#listen_addresses = 'localhost'/listen_addresses = 'localhost'/" /var/lib/pgsql/16/data/postgresql.conf`,
-      // Replace peer auth with md5 for local connections
-      `sed -i 's/^local   all             all                                     peer/local   all             all                                     md5/' /var/lib/pgsql/16/data/pg_hba.conf`,
-      `echo "host    all             all             127.0.0.1/32            md5" >> /var/lib/pgsql/16/data/pg_hba.conf`,
-      'systemctl restart postgresql-16',
+      `PG_HBA=$(sudo -u postgres psql -t -c "SHOW hba_file;" | xargs)`,
+      `PG_CONF=$(sudo -u postgres psql -t -c "SHOW config_file;" | xargs)`,
+      `sed -i "s/#listen_addresses = 'localhost'/listen_addresses = 'localhost'/" $PG_CONF`,
+      `sed -i 's/^local   all             all                                     peer/local   all             all                                     md5/' $PG_HBA`,
+      `echo "host    all             all             127.0.0.1/32            md5" >> $PG_HBA`,
+      'systemctl restart postgresql',
 
       // ── CloudWatch agent ─────────────────────────────────────────────
       'dnf install -y amazon-cloudwatch-agent',
@@ -254,8 +258,8 @@ EOF`,
       `cat > /etc/systemd/system/famosi.service << 'EOF'
 [Unit]
 Description=Famosi Telegram Bot
-After=network.target postgresql-16.service
-Requires=postgresql-16.service
+After=network.target postgresql.service
+Requires=postgresql.service
 
 [Service]
 Type=simple

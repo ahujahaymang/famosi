@@ -109,6 +109,9 @@ Rules:
 - Use metric or stated units exactly as given by the user.
 - All string values must be non-empty.
 - For date/time fields: interpret relative terms (tomorrow, next Friday, this evening) relative to today's date shown above.
+- For symptom extraction: if the user mentions MULTIPLE symptoms in one message (e.g. "headache and nausea"), extract the FIRST symptom mentioned. Use severity=5 and frequency=1 as defaults when not specified.
+- For symptom severity: if not explicitly stated, default to 5.
+- For symptom frequency: if not explicitly stated (e.g. "all morning", "today"), default to 1.
 """
 
 

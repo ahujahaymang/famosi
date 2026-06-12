@@ -69,7 +69,7 @@ _VALID_RECORD_TYPES: frozenset[str] = frozenset(
 )
 
 # Default look-back window when no date range is given by the user.
-_DEFAULT_LOOKBACK_DAYS: int = 7
+_DEFAULT_LOOKBACK_DAYS: int = 14
 
 # ---------------------------------------------------------------------------
 # Nano extraction: query parameter schema
@@ -97,11 +97,12 @@ Extract the following two parameters from their message:
    If the user says "yesterday", use yesterday's date for both.
    If the user says "this week" or "last 7 days", set start to 7 days ago and end to today.
    If the user says "upcoming" or "coming up", set start to today and end to 30 days from now.
-   If no date range is mentioned, omit both "start" and "end" (or set to null).
+   If NO specific time reference is given (e.g. "what did I eat", "show my symptoms", "what questions do I have"), omit both "start" and "end" entirely — do NOT default to today.
 
 Rules:
 - Respond with a single valid JSON object and nothing else.
 - Do NOT fabricate dates that were not implied by the message.
+- Only set date_range when the user explicitly mentions a time period (today, yesterday, this week, last month, etc.).
 """
 
 
@@ -395,6 +396,7 @@ async def handle_query_intent(
     # ------------------------------------------------------------------
     user_id: int | None = None
     requesting_role: str = "mom"  # safe default
+    user_obj = None
 
     if context.bot_data and context.bot_data.get("current_user") is not None:
         user_obj = context.bot_data.get("current_user")
@@ -462,16 +464,29 @@ async def handle_query_intent(
             from app.models.appointment import Appointment  # noqa: PLC0415
             from sqlalchemy import select  # noqa: PLC0415
             async with _AsyncSessionFactory() as db:
-                # Fetch future non-cancelled appointments
-                result = await db.execute(
-                    select(Appointment)
-                    .where(
-                        Appointment.user_id == user_id,
-                        Appointment.cancelled.is_(False),
+                if requesting_role == "partner" and user_obj is not None:
+                    # Partner: query mom's shared appointments via family_memory
+                    family_unit_id = getattr(user_obj, "family_unit_id", None)
+                    if family_unit_id is not None:
+                        records = list(await family_memory.get_shared_appointments(
+                            db=db,
+                            family_unit_id=family_unit_id,
+                        ))
+                        log.info("query_handler_family_appointments_fetched",
+                                 record_count=len(records))
+                    else:
+                        records = []
+                else:
+                    # Mom: query own appointments (all, not just future ones for history)
+                    result = await db.execute(
+                        select(Appointment)
+                        .where(
+                            Appointment.user_id == user_id,
+                            Appointment.cancelled.is_(False),
+                        )
+                        .order_by(Appointment.appointment_at.asc())
                     )
-                    .order_by(Appointment.appointment_at.asc())
-                )
-                records = list(result.scalars().all())
+                    records = list(result.scalars().all())
         elif record_type == "reminder":
             from app.components import reminder_system  # noqa: PLC0415
             async with _AsyncSessionFactory() as db:

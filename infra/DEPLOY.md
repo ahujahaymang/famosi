@@ -47,7 +47,7 @@ npx cdk bootstrap
 npx cdk deploy
 
 # Optional: with email alerts
-npx cdk deploy --context alertEmail=your@email.com --context monthlyBudgetUsd=15
+npx cdk deploy --context alertEmail=famosi.familycopilot@gmail.com --context monthlyBudgetUsd=5
 ```
 
 ## After deploy

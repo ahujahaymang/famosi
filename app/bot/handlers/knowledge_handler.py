@@ -59,7 +59,7 @@ You are Famosi, a knowledgeable and empathetic pregnancy assistant.
 
 The user is {user_role_context}.
 The pregnancy is currently at {gestational_context}.
-
+{diet_context}
 Answer the user's question using the context passages below where relevant.
 If the context passages don't cover the question, use your general pregnancy
 knowledge to give a helpful answer. Do not say you cannot help.
@@ -72,6 +72,7 @@ Guidelines:
 - Cite the source name (e.g. ACOG, WHO, NHS, CDC) when the context is relevant.
 - Tailor your answer to the gestational stage where appropriate.
 - Keep the response under 400 words.
+- IMPORTANT: Always respect the user's dietary preferences. {diet_instruction}
 
 --- CONTEXT PASSAGES ---
 {context}
@@ -87,7 +88,7 @@ You are Famosi, a knowledgeable and empathetic pregnancy assistant.
 
 The user is {user_role_context}.
 The pregnancy is currently at {gestational_context}.
-
+{diet_context}
 Answer their question using your general pregnancy knowledge.
 Guidelines:
 - Address the user according to their role (partner/dad or mom).
@@ -98,6 +99,7 @@ Guidelines:
 - End with a brief note to confirm with their healthcare provider for personalised advice.
 - Keep the response under 400 words.
 - Do NOT say you don't have information — you are a knowledgeable assistant.
+- IMPORTANT: Always respect the user's dietary preferences. {diet_instruction}
 """
 
 # Category filter applied for Partner role (Req 18.1)
@@ -215,17 +217,20 @@ async def handle_knowledge_intent(
     # ------------------------------------------------------------------
     if not chunks:
         log.info("knowledge_handler_rag_empty_using_llm_fallback")
-        return await _llm_fallback(user_message, user_obj, llm_client, log)
+        return await _llm_fallback(user_message, user_obj, llm_client, log, user_id)
 
     # ------------------------------------------------------------------
     # Step 4 — compose grounded response via the reasoning tier (Req 14.4)
     # ------------------------------------------------------------------
     gestational_context = _build_gestational_context(user_obj)
     user_role_context = _build_role_context(user_obj)
+    diet_context, diet_instruction = await _build_diet_context(user_obj, user_id)
     context_text = _build_context_text(chunks)
     system_prompt = _KNOWLEDGE_SYSTEM_PROMPT_TEMPLATE.format(
         gestational_context=gestational_context,
         user_role_context=user_role_context,
+        diet_context=diet_context,
+        diet_instruction=diet_instruction,
         context=context_text,
     )
 
@@ -309,16 +314,20 @@ async def _llm_fallback(
     user_obj: Any,
     llm_client: "LLMClient",
     log: Any,
+    user_id: int | None = None,
 ) -> tuple[str | None, dict]:
     """
     Answer the question using the LLM's own knowledge when RAG has no chunks.
-    Injects gestational stage and user role so the model answers correctly.
+    Injects gestational stage, user role and diet preferences so the model answers correctly.
     """
     gestational_context = _build_gestational_context(user_obj)
     user_role_context = _build_role_context(user_obj)
+    diet_context, diet_instruction = await _build_diet_context(user_obj, user_id)
     system_prompt = _FALLBACK_SYSTEM_PROMPT_TEMPLATE.format(
         gestational_context=gestational_context,
         user_role_context=user_role_context,
+        diet_context=diet_context,
+        diet_instruction=diet_instruction,
     )
     messages = [
         {"role": "system", "content": system_prompt},
@@ -338,6 +347,71 @@ async def _llm_fallback(
     except Exception:  # noqa: BLE001
         log.exception("knowledge_handler_llm_fallback_failed")
         return _NO_GUIDANCE_MESSAGE, {"model_used": None, "tokens_used": None}
+
+
+async def _build_diet_context(user_obj: Any, user_id: int | None) -> tuple[str, str]:
+    """
+    Build dietary context strings from the user's food_preference and
+    any stored food dislikes/allergies in the preferences table.
+
+    Returns
+    -------
+    (diet_context_line, diet_instruction)
+    - diet_context_line: A line to inject into the system prompt (may be empty)
+    - diet_instruction: A specific instruction about what to avoid (may be empty)
+    """
+    lines: list[str] = []
+    avoid_items: list[str] = []
+
+    # 1. Food preference from user profile (vegetarian, vegan, etc.)
+    if user_obj is not None:
+        food_pref = getattr(user_obj, "food_preference", None)
+        if food_pref is not None:
+            pref_val = str(getattr(food_pref, "value", food_pref)).lower()
+            if pref_val == "vegetarian":
+                lines.append("The user follows a vegetarian diet (no meat or fish).")
+                avoid_items.append("meat, fish, or seafood")
+            elif pref_val == "vegan":
+                lines.append("The user follows a vegan diet (no animal products).")
+                avoid_items.append("meat, fish, dairy, eggs, or other animal products")
+
+    # 2. Stored food dislikes and allergies from the preferences table
+    if user_id is not None:
+        try:
+            from app.dependencies import _AsyncSessionFactory as _SF  # noqa: PLC0415
+            from app.models.preference import Preference as _Pref, PreferenceType as _PT  # noqa: PLC0415
+            from sqlalchemy import select as _select  # noqa: PLC0415
+            async with _SF() as db:
+                result = await db.execute(
+                    _select(_Pref).where(
+                        _Pref.user_id == user_id,
+                        _Pref.active.is_(True),
+                        _Pref.preference_type.in_([_PT.dislike, _PT.allergy]),
+                    )
+                )
+                prefs = result.scalars().all()
+                for pref in prefs:
+                    item = getattr(pref, "food_item", None)
+                    if item:
+                        ptype = str(getattr(pref.preference_type, "value", pref.preference_type))
+                        if ptype == "allergy":
+                            avoid_items.append(f"{item} (allergy)")
+                        else:
+                            avoid_items.append(item)
+        except Exception:  # noqa: BLE001
+            pass  # never let preference lookup break the main response
+
+    if avoid_items:
+        avoided_str = ", ".join(avoid_items)
+        lines.append(f"The user avoids or dislikes: {avoided_str}.")
+
+    diet_context = "\n".join(lines) + "\n" if lines else ""
+    diet_instruction = (
+        f"Do NOT suggest any of the following: {', '.join(avoid_items)}."
+        if avoid_items else
+        "Respect any dietary preferences the user has mentioned."
+    )
+    return diet_context, diet_instruction
 
 
 def _build_context_text(chunks: list) -> str:

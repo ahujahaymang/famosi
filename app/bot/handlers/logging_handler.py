@@ -76,21 +76,27 @@ logger = structlog.get_logger(__name__)
 # Each tuple: (keywords, record_type)
 # Order matters: more specific rules first to avoid false-positive matches.
 _KEYWORD_RULES: list[tuple[tuple[str, ...], str]] = [
-    # question/doctor — explicit ask for doctor
-    (("ask doctor", "question for doctor", "ask my doctor", "want to ask"), "question"),
+    # question/doctor — explicit ask for doctor (must come before reminder/appointment)
+    (("ask doctor", "question for doctor", "ask my doctor", "want to ask",
+      "ask my ob", "ask the doctor", "note for doctor", "question for my doctor"), "question"),
+    # preference/avoidance — check BEFORE meal so "don't eat X" → preference not meal
+    (("don't eat", "do not eat", "won't eat", "can't eat", "not eating", "never eat",
+      "don't like", "don't want", "prefer not", "no longer want",
+      "allergy", "allergic", "avoid", "dislike", "vegetarian", "vegan",
+      "hate ", "i hate", "shellfish"), "preference"),
     # reminder creation — check BEFORE appointment (remind me to... for my scan → reminder)
     (("remind me", "reminder", "set a reminder", "add a reminder", "alert me", "notify me"), "reminder"),
     # appointment scheduling
     (("appointment", "scan", "ultrasound", "ob visit", "bloodwork", "schedule a", "book a"), "appointment"),
     (("symptom", "nausea", "nauseous", "pain", "headache", "cramp", "backache",
        "dizzy", "tired", "exhausted", "fatigue", "vomit", "ache", "bloat",
-       "swollen", "spotting", "bleed", "vomiting", "dizzy"), "symptom"),
+       "swollen", "spotting", "bleed", "vomiting"), "symptom"),
     (("exercise", "workout", "yoga", "swim", "run"), "exercise"),
     (("walked", "walking"), "exercise"),
     (("medication", "medicine", "pill", "tablet", "supplement", "vitamin", "folic"), "medication"),
     (("weight", "weigh", "kg", "lbs", "pounds"), "weight"),
     (("water", "drink", "hydrat", "ml", "oz", "glass", "glasses", "litre", "litres", "liter", "liters", "cup", "cups"), "water"),
-    (("prefer", "allergy", "allergic", "avoid", "dislike", "vegetarian", "vegan", "meat", "shellfish"), "preference"),
+    (("prefer", "meat", "food preference"), "preference"),
     (("meal", "food", "ate", "eat", "breakfast", "lunch", "dinner"), "meal"),
 ]
 
