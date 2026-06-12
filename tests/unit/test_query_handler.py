@@ -280,11 +280,13 @@ class TestHandleQueryIntent:
 
     @pytest.mark.asyncio
     async def test_partner_visibility_applied(self):
-        """Partner role should have visibility filtering applied in the DB query."""
+        """Partner role should use family_memory to query mom's shared records."""
         from app.bot.handlers.query_handler import handle_query_intent
 
         update = _make_update()
         context = _make_context(db_user_id=20, role="partner")
+        # Partner needs a family_unit_id on their user object
+        context.bot_data["current_user"].family_unit_id = 5
         route_result = MagicMock()
 
         client = _make_llm_client({"record_type": "meal", "date_range": {}})
@@ -299,14 +301,15 @@ class TestHandleQueryIntent:
         ])
 
         with patch("app.bot.handlers.query_handler._AsyncSessionFactory") as mock_factory, \
-             patch("app.bot.handlers.query_handler.personal_memory") as mock_pm:
+             patch("app.bot.handlers.query_handler.family_memory") as mock_fm:
             mock_session = AsyncMock()
             mock_factory.return_value.__aenter__ = AsyncMock(return_value=mock_session)
             mock_factory.return_value.__aexit__ = AsyncMock(return_value=False)
-            mock_pm.get_records = AsyncMock(return_value=[])
+            mock_fm.get_shared_records = AsyncMock(return_value=[])
 
             await handle_query_intent(update, context, client, route_result, "Show shared meals")
 
-        # Verify requesting_role was "partner"
-        call_kwargs = mock_pm.get_records.call_args.kwargs
-        assert call_kwargs.get("requesting_role") == "partner"
+        # Verify family_memory was used for partner
+        mock_fm.get_shared_records.assert_awaited_once()
+        call_kwargs = mock_fm.get_shared_records.call_args.kwargs
+        assert call_kwargs.get("family_unit_id") == 5

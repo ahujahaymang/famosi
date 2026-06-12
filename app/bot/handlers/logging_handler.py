@@ -82,7 +82,9 @@ _KEYWORD_RULES: list[tuple[tuple[str, ...], str]] = [
     (("remind me", "reminder", "set a reminder", "add a reminder", "alert me", "notify me"), "reminder"),
     # appointment scheduling
     (("appointment", "scan", "ultrasound", "ob visit", "bloodwork", "schedule a", "book a"), "appointment"),
-    (("symptom", "nausea", "nauseous", "pain", "headache", "cramp", "backache", "dizzy", "tired", "vomit", "ache"), "symptom"),
+    (("symptom", "nausea", "nauseous", "pain", "headache", "cramp", "backache",
+       "dizzy", "tired", "exhausted", "fatigue", "vomit", "ache", "bloat",
+       "swollen", "spotting", "bleed", "vomiting", "dizzy"), "symptom"),
     (("exercise", "workout", "yoga", "swim", "run"), "exercise"),
     (("walked", "walking"), "exercise"),
     (("medication", "medicine", "pill", "tablet", "supplement", "vitamin", "folic"), "medication"),

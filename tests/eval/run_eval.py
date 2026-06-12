@@ -87,12 +87,8 @@ async def run_one(scenario: Scenario, dry_run: bool = False) -> dict:
 
     t0 = time.monotonic()
 
-    # Run scenario against the real pipeline (with a fresh DB session, rolled back)
-    from app.dependencies import _AsyncSessionFactory
-    async with _AsyncSessionFactory() as db:
-        harness_result = await run_scenario(scenario, db)
-        # Always rollback — we don't want eval runs to pollute the DB
-        await db.rollback()
+    # Run scenario against the real pipeline (self-contained, manages its own DB)
+    harness_result = await run_scenario(scenario)
 
     # Ask the judge
     judge_result: JudgeResult = await judge(

@@ -39,6 +39,7 @@ import structlog
 
 from app.dependencies import _AsyncSessionFactory
 from app.memory import personal_memory
+from app.memory import family_memory
 
 if TYPE_CHECKING:
     from app.core.intent_router import RouteResult
@@ -194,7 +195,8 @@ def _default_date_range() -> tuple[datetime, datetime]:
 # Record serialisation helpers
 # ---------------------------------------------------------------------------
 
-def _serialize_records(record_type: str, records: list[Any]) -> str:
+def _serialize_records(record_type: str, records: list[Any],
+                       meal_items_map: dict | None = None) -> str:
     """
     Convert a list of ORM records into a plain-text summary for the Mini LLM.
 
@@ -214,9 +216,13 @@ def _serialize_records(record_type: str, records: list[Any]) -> str:
 
             if record_type == "meal":
                 attrs["logged_at"] = getattr(rec, "logged_at", "")
-                attrs["visibility"] = getattr(rec, "visibility_level", "")
-                # MealItems are not eagerly loaded in get_records; show what's available
-                attrs["id"] = getattr(rec, "id", "")
+                # Include food names from the items map
+                if meal_items_map:
+                    foods = meal_items_map.get(getattr(rec, "id", None), [])
+                    if foods:
+                        attrs["foods"] = ", ".join(foods)
+                    else:
+                        attrs["meal_id"] = getattr(rec, "id", "")
 
             elif record_type == "symptom":
                 attrs["logged_at"] = getattr(rec, "logged_at", "")
@@ -472,15 +478,32 @@ async def handle_query_intent(
                 records = await reminder_system.list_reminders(user_id, db, active_only=True)
         else:
             async with _AsyncSessionFactory() as db:
-                records = await personal_memory.get_records(
-                    db=db,
-                    user_id=user_id,
-                    record_type=record_type,
-                    start=start_dt,
-                    end=end_dt,
-                    requesting_user_id=user_id,
-                    requesting_role=requesting_role,
-                )
+                # For partner role: query from the linked family unit (mom's records)
+                # that are marked as partner_shared or doctor_shared
+                if requesting_role == "partner" and user_obj is not None:
+                    family_unit_id = getattr(user_obj, "family_unit_id", None)
+                    if family_unit_id is not None:
+                        records = await family_memory.get_shared_records(
+                            db=db,
+                            family_unit_id=family_unit_id,
+                            record_type=record_type,
+                            start=start_dt,
+                            end=end_dt,
+                        )
+                        log.info("query_handler_family_records_fetched",
+                                 record_type=record_type, record_count=len(records))
+                    else:
+                        records = []
+                else:
+                    records = await personal_memory.get_records(
+                        db=db,
+                        user_id=user_id,
+                        record_type=record_type,
+                        start=start_dt,
+                        end=end_dt,
+                        requesting_user_id=user_id,
+                        requesting_role=requesting_role,
+                    )
     except ValueError as exc:
         # Unknown record_type — should not happen since we validated above,
         # but handle defensively.
@@ -500,10 +523,26 @@ async def handle_query_intent(
         requesting_role=requesting_role,
     )
 
+    # For meals, fetch the food items separately (no ORM relationship defined)
+    meal_items_map: dict[int, list[str]] = {}
+    if record_type == "meal" and records:
+        try:
+            from app.models.meal import MealItem  # noqa: PLC0415
+            from sqlalchemy import select as _select  # noqa: PLC0415
+            meal_ids = [r.id for r in records]
+            async with _AsyncSessionFactory() as db:
+                result = await db.execute(
+                    _select(MealItem).where(MealItem.meal_id.in_(meal_ids))
+                )
+                for item in result.scalars().all():
+                    meal_items_map.setdefault(item.meal_id, []).append(item.food_name)
+        except Exception:  # noqa: BLE001
+            pass  # serializer will fall back to meal ID if no items
+
     # ------------------------------------------------------------------
     # Step 3: Serialise and format via Mini tier
     # ------------------------------------------------------------------
-    records_text = _serialize_records(record_type, records)
+    records_text = _serialize_records(record_type, records, meal_items_map)
 
     formatted_text, mini_model, mini_tokens = await _format_response(
         user_message, record_type, records_text, llm_client
