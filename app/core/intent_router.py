@@ -98,7 +98,13 @@ Classify the user message into EXACTLY one of the following intents:
                       water drunk, a question to ask their doctor, OR scheduling/creating
                       an appointment or reminder.
                       Examples: "I had oatmeal", "mild nausea today", "appointment tomorrow
-                      at 10am", "remind me to take iron at 9am", "I feel exhausted today".
+                      at 10am", "remind me to take iron at 9am", "I feel exhausted today",
+                      "ask my doctor about magnesium", "ask doctor if travel is safe",
+                      "note for my doctor: check blood pressure".
+                      IMPORTANT: "Ask doctor about X" or "Ask my doctor about X" means the
+                      user wants to SAVE a question for their doctor visit — this is LOGGING.
+                      But "What questions do I have for my doctor?" or "Show me my doctor
+                      questions" is a PERSONAL_DATA_QUERY — retrieving saved questions.
 - PERSONAL_DATA_QUERY: The user is asking about data they have previously logged
                        (e.g., "what did I eat yesterday?", "show my symptoms this week",
                        "what appointments do I have coming up?").

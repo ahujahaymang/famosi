@@ -96,6 +96,9 @@ Extract the following two parameters from their message:
    If the user says "today", use today's date for both.
    If the user says "yesterday", use yesterday's date for both.
    If the user says "this week" or "last 7 days", set start to 7 days ago and end to today.
+   If the user says "last month" or "past month", set start to 30 days ago and end to today.
+   If the user says "this month", set start to the 1st of the current month and end to today.
+   If the user says "compare this week to last week" or similar cross-week queries, set start to 14 days ago and end to today.
    If the user says "upcoming" or "coming up", set start to today and end to 30 days from now.
    If NO specific time reference is given (e.g. "what did I eat", "show my symptoms", "what questions do I have"), omit both "start" and "end" entirely — do NOT default to today.
 

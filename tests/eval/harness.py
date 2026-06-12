@@ -103,29 +103,55 @@ def make_context(user_obj: Optional[User] = None,
 # ---------------------------------------------------------------------------
 
 def _collect_responses(update: MagicMock) -> list[str]:
-    """Extract all text sent to the user from a mock update."""
+    """Extract all text sent to the user from a mock update, including inline keyboard button labels."""
     responses = []
+
+    def _extract_keyboard_text(call_kwargs: dict) -> str:
+        """Extract button labels from reply_markup if present."""
+        markup = call_kwargs.get("reply_markup")
+        if markup is None:
+            return ""
+        # InlineKeyboardMarkup has an inline_keyboard attribute (list of rows)
+        try:
+            rows = getattr(markup, "inline_keyboard", None)
+            if rows:
+                labels = []
+                for row in rows:
+                    for btn in row:
+                        label = getattr(btn, "text", None)
+                        if label:
+                            labels.append(label)
+                if labels:
+                    return " | ".join(labels)
+        except Exception:
+            pass
+        return ""
+
+    def _extract_from_call(call) -> None:
+        args = call.args or (None,)
+        text = args[0] if args else call.kwargs.get("text", "")
+        if text:
+            responses.append(str(text))
+            # Append button labels on the same logical message
+            kb_text = _extract_keyboard_text(call.kwargs)
+            if kb_text:
+                responses.append(f"[Buttons: {kb_text}]")
+
     if getattr(update, "message", None) and update.message is not None:
         for call in update.message.reply_text.call_args_list:
-            text = (call.args or (None,))[0] or call.kwargs.get("text", "")
-            if text:
-                responses.append(str(text))
+            _extract_from_call(call)
         ret = update.message.reply_text.return_value
         if ret and hasattr(ret, "edit_text"):
             for call in ret.edit_text.call_args_list:
-                text = (call.args or (None,))[0] or call.kwargs.get("text", "")
-                if text:
-                    responses.append(str(text))
+                _extract_from_call(call)
+
     if getattr(update, "callback_query", None) and update.callback_query is not None:
         for call in update.callback_query.edit_message_text.call_args_list:
-            text = (call.args or (None,))[0] or call.kwargs.get("text", "")
-            if text:
-                responses.append(str(text))
+            _extract_from_call(call)
         if hasattr(update.callback_query, "message") and update.callback_query.message is not None:
             for call in update.callback_query.message.reply_text.call_args_list:
-                text = (call.args or (None,))[0] or call.kwargs.get("text", "")
-                if text:
-                    responses.append(str(text))
+                _extract_from_call(call)
+
     return responses
 
 

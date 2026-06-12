@@ -73,6 +73,9 @@ Guidelines:
 - Tailor your answer to the gestational stage where appropriate.
 - Keep the response under 400 words.
 - IMPORTANT: Always respect the user's dietary preferences. {diet_instruction}
+- CLINICAL ACCURACY: Back sleeping is generally safe before 20 weeks. The
+  recommendation to sleep on the left side applies after 20 weeks of pregnancy,
+  not in the first or early second trimester.
 
 --- CONTEXT PASSAGES ---
 {context}
@@ -100,6 +103,8 @@ Guidelines:
 - Keep the response under 400 words.
 - Do NOT say you don't have information — you are a knowledgeable assistant.
 - IMPORTANT: Always respect the user's dietary preferences. {diet_instruction}
+- CLINICAL ACCURACY: Back sleeping is generally safe before 20 weeks. The
+  recommendation to sleep on the left side applies after 20 weeks of pregnancy.
 """
 
 # Category filter applied for Partner role (Req 18.1)

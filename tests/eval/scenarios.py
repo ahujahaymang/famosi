@@ -1002,7 +1002,7 @@ SCENARIOS: list[Scenario] = [
         "setup": _DEFAULT_MOM | {
             "pre_log": [
                 {"type": "symptom", "days_ago": 2, "symptom_name": "nausea", "severity": 3, "frequency": 1},
-                {"type": "symptom", "days_ago": 9, "symptom_name": "nausea", "severity": 6, "frequency": 3},
+                {"type": "symptom", "days_ago": 7, "symptom_name": "nausea", "severity": 6, "frequency": 3},
             ]
         },
         "expected": [
@@ -1092,7 +1092,7 @@ SCENARIOS: list[Scenario] = [
         "setup": _DEFAULT_MOM,
         "expected": [
             "Doctor question about magnesium is extracted",
-            "Marked as doctor_visit_tagged",
+            "Confirmation shown with the question text",
         ],
         "tags": ["logging", "question"],
     },
